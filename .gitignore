@@ -1,0 +1,35 @@
+# Dependencies and build output
+**/node_modules/
+**/dist/
+**/build/
+*.log
+
+# Local credentials
+**/*credentials*
+
+# Private OAuth signing keys
+jwks.json
+id_rsa
+id_rsa.*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Database backups
+*.sql.bak
+*.sql.backup
+*.dump
+*.sql.gz
+**/backup*.sql
+**/backups/
+
+**/.env
+**/.env.*
+!**/.env.example
+*.local

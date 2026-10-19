@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: northstar-oauth
+    rootDir: oauth-server
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node server.js
+    envVars:
+      - key: OAUTH_ISSUER
+        sync: false
+      - key: MCP_RESOURCE
+        sync: false
+      - key: OAUTH_REDIRECT_URIS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: MCP_INTROSPECTION_SECRET
+        sync: false
+      - key: OAUTH_STORAGE_DATABASE_URL
+        sync: false
+      - key: OAUTH_JWKS_JSON
+        sync: false
+
+  - type: web
+    name: northstar-mcp
+    rootDir: mcp-server
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node server.js
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: OAUTH_ISSUER
+        sync: false
+      - key: OAUTH_INTROSPECTION_URL
+        sync: false
+      - key: OAUTH_CLIENT_ID
+        value: northstar-mcp-backend
+      - key: OAUTH_CLIENT_SECRET
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: MCP_RESOURCE
+        sync: false
