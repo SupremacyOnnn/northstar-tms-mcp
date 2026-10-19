@@ -50,7 +50,5 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
-      - key: NORTHSTAR_API_URL
-        sync: false
       - key: MCP_RESOURCE
         sync: false

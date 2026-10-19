@@ -40,9 +40,9 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const REQUIRED_SCOPE = "northstar:loads:read";
 const MCP_RESOURCE = process.env.MCP_RESOURCE;
 
-if (!process.env.DATABASE_URL || !OAUTH_CLIENT_SECRET || !JWT_SECRET || !MCP_RESOURCE || !process.env.NORTHSTAR_API_URL) {
+if (!process.env.DATABASE_URL || !OAUTH_CLIENT_SECRET || !JWT_SECRET || !MCP_RESOURCE) {
   throw new Error(
-    "Missing DATABASE_URL, NORTHSTAR_API_URL, MCP_RESOURCE, OAUTH_CLIENT_SECRET or JWT_SECRET"
+    "Missing DATABASE_URL, MCP_RESOURCE, OAUTH_CLIENT_SECRET or JWT_SECRET"
   );
 }
 
@@ -53,13 +53,6 @@ const issuerUrl = new URL(OAUTH_ISSUER);
 const introspectionUrl = new URL(INTROSPECTION_URL);
 if (production && (issuerUrl.protocol !== 'https:' || introspectionUrl.protocol !== 'https:')) {
   throw new Error('Production OAuth endpoints must use HTTPS');
-}
-const apiUrl = new URL(process.env.NORTHSTAR_API_URL);
-if (apiUrl.username || apiUrl.password || apiUrl.search || apiUrl.hash ||
-    (apiUrl.protocol !== 'https:' && (apiUrl.protocol !== 'http:' ||
-      (production ? !apiUrl.hostname.endsWith('.internal') :
-        !['localhost', '127.0.0.1', '[::1]'].includes(apiUrl.hostname))))) {
-  throw new Error('REST URL must use HTTPS or a trusted private/local transport');
 }
 const metadataPath = '/.well-known/oauth-protected-resource/mcp';
 const metadataUrl = new URL(metadataPath, resourceUrl.origin).href;
@@ -163,16 +156,20 @@ async function getLoadStatus(userId, loadId) {
   return result.rows[0];
 }
 
-async function callNorthstar(route, token) {
-  const response = await fetch(new URL(route, apiUrl), {
-    headers: {Authorization: `Bearer ${token}`},
-    redirect: 'error',
-    signal: AbortSignal.timeout(5000)
-  });
-  // The REST endpoint verifies the internal JWT and demo_can_view_load before returning events.
-  if (response.status === 404) throw new Error('Shipment not found');
-  if (!response.ok) throw new Error('Unable to retrieve shipment events');
-  return response.json();
+async function getLoadEvents(userId, loadId) {
+  const allowed = await pool.query(
+    "SELECT public.demo_can_view_load($1, $2) AS allowed",
+    [userId, loadId]
+  );
+  if (allowed.rows[0]?.allowed !== true) throw new Error("Shipment not found");
+  const result = await pool.query(
+    `SELECT id, load_id, event_type, location, description, event_time
+       FROM public.load_events
+      WHERE load_id = $1
+      ORDER BY event_time DESC, id DESC`,
+    [loadId]
+  );
+  return {load_id: loadId, events: result.rows};
 }
 
 function createMcpServer(userId) {
@@ -227,10 +224,7 @@ function createMcpServer(userId) {
     },
     async ({ load_id }) => {
       try {
-        const data = await callNorthstar(
-          `/api/v1/loads/${encodeURIComponent(load_id)}/events`,
-          createRestToken(userId)
-        );
+        const data = await getLoadEvents(userId, load_id);
 
         return {
           content: [

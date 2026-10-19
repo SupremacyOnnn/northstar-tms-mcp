@@ -44,7 +44,7 @@ test('ChatGPT OAuth, MCP, REST and tenant isolation', async t => {
     OAUTH_ISSUER:issuer, MCP_RESOURCE:resource, OAUTH_INTROSPECTION_URL:`${issuer}/token/introspection`,
     OAUTH_CLIENT_ID:'northstar-mcp-backend', OAUTH_CLIENT_SECRET:introspectionSecret,
     MCP_INTROSPECTION_SECRET:introspectionSecret, JWT_SECRET:jwtSecret,
-    OAUTH_JWKS_JSON:JSON.stringify({keys:[jwk]}), NORTHSTAR_API_URL:'https://rest.example.test',
+    OAUTH_JWKS_JSON:JSON.stringify({keys:[jwk]}),
     CHATGPT_CLIENT_ID:'fixture-chatgpt', CHATGPT_REDIRECT_URIS:callback
   });
   const storage = new Map();

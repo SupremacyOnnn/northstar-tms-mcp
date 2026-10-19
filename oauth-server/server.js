@@ -147,18 +147,9 @@ const configuration = {
       enabled: true,
 
       getResourceServerInfo(ctx, resourceIndicator) {
-        console.log(
-          "[OAuth DEBUG] Requested resource:",
-          resourceIndicator
-        );
-
         if (resourceIndicator !== MCP_RESOURCE) {
-          console.log("[OAuth DEBUG] Resource mismatch");
-
           throw new Error("Unknown OAuth resource");
         }
-
-        console.log("[OAuth DEBUG] Resource accepted");
 
         return {
           scope: MCP_SCOPE,
@@ -198,26 +189,6 @@ provider.proxy = renderProxy;
 provider.maxIpsCount = 1;
 
 // --------------------------------------------------
-// Access token debugging
-// --------------------------------------------------
-
-provider.on("access_token.issued", (ctx) => {
-  console.log("\n[OAuth DEBUG] Access token issued");
-
-  const token = ctx.oidc?.entities?.AccessToken;
-
-  if (!token) {
-    console.log("Access token metadata unavailable");
-    return;
-  }
-
-  console.log("Client:", token.clientId);
-  console.log("Account:", token.accountId);
-  console.log("Scope:", token.scope);
-  console.log("Resource:", token.resource);
-  console.log("Audience:", token.aud);
-});
-
 // --------------------------------------------------
 // Health endpoint
 // --------------------------------------------------
@@ -236,11 +207,6 @@ app.get("/health", (req, res) => {
 app.get("/interaction/:uid", async (req, res) => {
   try {
     const details = await provider.interactionDetails(req, res);
-
-    console.log("OAuth interaction:", {
-      prompt: details.prompt.name,
-      clientId: details.params.client_id
-    });
 
     if (details.uid !== req.params.uid) {
       return res.status(400).send(
