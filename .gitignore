@@ -1,12 +1,3 @@
-# Dependencies and build output
-**/node_modules/
-**/dist/
-**/build/
-*.log
-
-# Local credentials
-**/*credentials*
-
 # Private OAuth signing keys
 jwks.json
 id_rsa
@@ -15,6 +6,13 @@ id_rsa.*
 *.pem
 *.p12
 *.pfx
+*.crt
+*.cer
+*.der
+*.jks
+*.keystore
+# Public CA trust anchor required by the database clients; contains no private key.
+!oauth-server/certs/supabase-ca.crt
 
 # Local databases
 *.sqlite
@@ -33,3 +31,9 @@ id_rsa.*
 **/.env.*
 !**/.env.example
 *.local
+
+**/node_modules/
+**/dist/
+**/build/
+*.log
+**/*credentials*

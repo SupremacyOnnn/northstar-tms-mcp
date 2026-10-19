@@ -6,12 +6,17 @@ services:
     plan: free
     buildCommand: npm ci
     startCommand: node server.js
+    healthCheckPath: /health
     envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CHATGPT_CLIENT_ID
+        sync: false
+      - key: CHATGPT_REDIRECT_URIS
+        sync: false
       - key: OAUTH_ISSUER
         sync: false
       - key: MCP_RESOURCE
-        sync: false
-      - key: OAUTH_REDIRECT_URIS
         sync: false
       - key: DATABASE_URL
         sync: false
@@ -24,12 +29,15 @@ services:
 
   - type: web
     name: northstar-mcp
-    rootDir: mcp-server
     runtime: node
     plan: free
-    buildCommand: npm ci
-    startCommand: node server.js
+    # Keep repository-root access to the shared public Supabase CA certificate.
+    buildCommand: npm --prefix mcp-server ci
+    startCommand: node mcp-server/server.js
+    healthCheckPath: /health
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         sync: false
       - key: OAUTH_ISSUER
@@ -41,6 +49,8 @@ services:
       - key: OAUTH_CLIENT_SECRET
         sync: false
       - key: JWT_SECRET
+        sync: false
+      - key: NORTHSTAR_API_URL
         sync: false
       - key: MCP_RESOURCE
         sync: false

@@ -2,6 +2,8 @@
 import { rateLimit } from "express-rate-limit";
 import { createRequire } from "node:module";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import "dotenv/config";
 import express from "express";
@@ -13,6 +15,7 @@ import { createPgAdapter } from "./pg-adapter.js";
 
 const require = createRequire(import.meta.url);
 const verifyUser = require("./verify-user.cjs");
+const { configureTransport } = require("./transport.cjs");
 
 const Provider = oidc.Provider;
 const app = express();
@@ -24,10 +27,27 @@ const ISSUER = process.env.OAUTH_ISSUER || "http://localhost:3003";
 
 const MCP_RESOURCE = process.env.MCP_RESOURCE || "http://localhost:3002/mcp";
 const MCP_SCOPE = "northstar:loads:read";
+const { production, renderProxy } = configureTransport(app, ISSUER);
+if (production && new URL(MCP_RESOURCE).protocol !== 'https:') throw new Error('Production MCP resource must use HTTPS');
+const chatgptClientId = process.env.CHATGPT_CLIENT_ID;
+const chatgptRedirects = (process.env.CHATGPT_REDIRECT_URIS || '').split(',').map(value => value.trim()).filter(Boolean);
+if (Boolean(chatgptClientId) !== Boolean(chatgptRedirects.length) || (production && !chatgptClientId)) {
+  throw new Error('Configure CHATGPT_CLIENT_ID and exact CHATGPT_REDIRECT_URIS together');
+}
+if (chatgptClientId && ['northstar-local-test', 'northstar-mcp-backend'].includes(chatgptClientId)) {
+  throw new Error('ChatGPT requires a separate OAuth client ID');
+}
+for (const redirect of chatgptRedirects) {
+  const url = new URL(redirect);
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('ChatGPT callback must be an exact HTTPS URI');
+}
 const JWKS = JSON.parse(process.env.OAUTH_JWKS_JSON || "{\"keys\":[]}");
 
 if (!process.env.OAUTH_JWKS_JSON || !Array.isArray(JWKS.keys) || JWKS.keys.length === 0) {
   throw new Error("OAUTH_JWKS_JSON must contain stable signing keys");
+}
+if (!process.env.DATABASE_URL || !process.env.MCP_INTROSPECTION_SECRET) {
+  throw new Error('DATABASE_URL and MCP_INTROSPECTION_SECRET are required');
 }
 
 // --------------------------------------------------
@@ -64,8 +84,12 @@ function validCsrfToken(uid, cookieHeader, submittedToken) {
 const configuration = {
   adapter: createPgAdapter(process.env.OAUTH_STORAGE_DATABASE_URL || process.env.DATABASE_URL),
   jwks: JWKS,
+  cookies: {
+    long: {secure: new URL(ISSUER).protocol === 'https:', httpOnly: true, sameSite: 'lax'},
+    short: {secure: new URL(ISSUER).protocol === 'https:', httpOnly: true, sameSite: 'lax'}
+  },
   clients: [
-    {
+    ...(!production ? [{
       client_id: "northstar-local-test",
 
       redirect_uris: (process.env.OAUTH_REDIRECT_URIS || "http://127.0.0.1:3004/callback").split(",").map(value => value.trim()),
@@ -74,7 +98,14 @@ const configuration = {
       grant_types: ["authorization_code"],
 
       token_endpoint_auth_method: "none"
-    },
+    }] : []),
+    ...(chatgptClientId ? [{
+      client_id: chatgptClientId,
+      redirect_uris: chatgptRedirects,
+      response_types: ['code'],
+      grant_types: ['authorization_code', 'refresh_token'],
+      token_endpoint_auth_method: 'none'
+    }] : []),
 
     {
       client_id: "northstar-mcp-backend",
@@ -106,7 +137,10 @@ const configuration = {
     },
 
     introspection: {
-      enabled: true
+      enabled: true,
+      allowedPolicy(ctx, client, token) {
+        return client.clientId === 'northstar-mcp-backend' && token.aud === MCP_RESOURCE;
+      }
     },
 
     resourceIndicators: {
@@ -160,6 +194,8 @@ const configuration = {
 // --------------------------------------------------
 
 const provider = new Provider(ISSUER, configuration);
+provider.proxy = renderProxy;
+provider.maxIpsCount = 1;
 
 // --------------------------------------------------
 // Access token debugging
@@ -515,8 +551,9 @@ app.use(provider.callback());
 // Start server
 // --------------------------------------------------
 
-app.listen(PORT, () => {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) app.listen(PORT, () => {
   console.log(
     `Northstar OAuth Server running at ${ISSUER}`
   );
 });
+export { app, provider };

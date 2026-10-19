@@ -1,5 +1,5 @@
 
-require("dotenv").config();
+require("dotenv").config({ path: process.env.DOTENV_CONFIG_PATH, quiet: true });
 
 const express = require("express");
 const jwt = require("jsonwebtoken");
@@ -7,6 +7,7 @@ const { Pool } = require("pg");
 const fs = require("fs");
 const path = require("path");
 const { z } = require("zod");
+const { configureTransport } = require("../oauth-server/transport.cjs");
 
 const { McpServer } = require(
   "@modelcontextprotocol/sdk/server/mcp.js"
@@ -39,18 +40,42 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const REQUIRED_SCOPE = "northstar:loads:read";
 const MCP_RESOURCE = process.env.MCP_RESOURCE;
 
-if (!process.env.DATABASE_URL || !OAUTH_CLIENT_SECRET || !JWT_SECRET) {
+if (!process.env.DATABASE_URL || !OAUTH_CLIENT_SECRET || !JWT_SECRET || !MCP_RESOURCE || !process.env.NORTHSTAR_API_URL) {
   throw new Error(
-    "Missing NORTHSTAR_API_URL, OAUTH_CLIENT_SECRET or JWT_SECRET"
+    "Missing DATABASE_URL, NORTHSTAR_API_URL, MCP_RESOURCE, OAUTH_CLIENT_SECRET or JWT_SECRET"
   );
 }
 
-app.use(express.json());
+const { production } = configureTransport(app, MCP_RESOURCE);
+const resourceUrl = new URL(MCP_RESOURCE);
+if (resourceUrl.pathname !== '/mcp') throw new Error('MCP_RESOURCE must identify /mcp');
+const issuerUrl = new URL(OAUTH_ISSUER);
+const introspectionUrl = new URL(INTROSPECTION_URL);
+if (production && (issuerUrl.protocol !== 'https:' || introspectionUrl.protocol !== 'https:')) {
+  throw new Error('Production OAuth endpoints must use HTTPS');
+}
+const apiUrl = new URL(process.env.NORTHSTAR_API_URL);
+if (apiUrl.username || apiUrl.password || apiUrl.search || apiUrl.hash ||
+    (apiUrl.protocol !== 'https:' && (apiUrl.protocol !== 'http:' ||
+      (production ? !apiUrl.hostname.endsWith('.internal') :
+        !['localhost', '127.0.0.1', '[::1]'].includes(apiUrl.hostname))))) {
+  throw new Error('REST URL must use HTTPS or a trusted private/local transport');
+}
+const metadataPath = '/.well-known/oauth-protected-resource/mcp';
+const metadataUrl = new URL(metadataPath, resourceUrl.origin).href;
+const metadata = {resource: MCP_RESOURCE, authorization_servers: [OAUTH_ISSUER], scopes_supported: [REQUIRED_SCOPE], bearer_methods_supported: ['header']};
+app.get(['/.well-known/oauth-protected-resource', metadataPath], (req, res) => res.json(metadata));
+function unauthorized(res, invalid = false) {
+  const error = invalid ? ', error="invalid_token"' : '';
+  res.set('WWW-Authenticate', `Bearer resource_metadata="${metadataUrl}", scope="${REQUIRED_SCOPE}"${error}`);
+  res.set('Cache-Control', 'no-store');
+  return res.status(401).json({error: invalid ? 'Invalid or unauthorized OAuth token' : 'Authentication required'});
+}
 
 // Validate OAuth access token with the authorization server.
 async function validateOAuthToken(token) {
   const credentials = Buffer.from(
-    `${OAUTH_CLIENT_ID}:${OAUTH_CLIENT_SECRET}`
+    `${encodeURIComponent(OAUTH_CLIENT_ID)}:${encodeURIComponent(OAUTH_CLIENT_SECRET)}`
   ).toString("base64");
 
   const response = await fetch(INTROSPECTION_URL, {
@@ -138,6 +163,18 @@ async function getLoadStatus(userId, loadId) {
   return result.rows[0];
 }
 
+async function callNorthstar(route, token) {
+  const response = await fetch(new URL(route, apiUrl), {
+    headers: {Authorization: `Bearer ${token}`},
+    redirect: 'error',
+    signal: AbortSignal.timeout(5000)
+  });
+  // The REST endpoint verifies the internal JWT and demo_can_view_load before returning events.
+  if (response.status === 404) throw new Error('Shipment not found');
+  if (!response.ok) throw new Error('Unable to retrieve shipment events');
+  return response.json();
+}
+
 function createMcpServer(userId) {
   const server = new McpServer({
     name: "northstar-tms",
@@ -192,7 +229,7 @@ function createMcpServer(userId) {
       try {
         const data = await callNorthstar(
           `/api/v1/loads/${encodeURIComponent(load_id)}/events`,
-          token
+          createRestToken(userId)
         );
 
         return {
@@ -228,13 +265,11 @@ app.get("/health", (req, res) => {
   });
 });
 
-app.post("/mcp", async (req, res) => {
+app.use('/mcp', async (req, res, next) => {
   const authorization = req.headers.authorization || "";
 
   if (!/^Bearer \S+$/i.test(authorization)) {
-    return res.status(401).json({
-      error: "Authentication required"
-    });
+    return unauthorized(res);
   }
 
   const oauthToken = authorization.slice(7);
@@ -244,14 +279,14 @@ app.post("/mcp", async (req, res) => {
   try {
     userId = await validateOAuthToken(oauthToken);
   } catch (error) {
-    console.error("OAuth validation failed:", error.message);
-
-    return res.status(401).json({
-      error: "Invalid or unauthorized OAuth token"
-    });
+    return unauthorized(res, true);
   }
+  req.authenticatedUserId = userId;
+  next();
+});
 
-  const server = createMcpServer(userId);
+app.post('/mcp', express.json({limit: '64kb'}), async (req, res) => {
+  const server = createMcpServer(req.authenticatedUserId);
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined
@@ -266,7 +301,7 @@ app.post("/mcp", async (req, res) => {
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
   } catch (error) {
-    console.error("MCP request failed:", error.message);
+    console.error("MCP request failed");
 
     if (!res.headersSent) {
       res.status(500).json({
@@ -276,8 +311,9 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+if (require.main === module) app.listen(PORT, () => {
   console.log(
     `Northstar MCP Server running at http://localhost:${PORT}/mcp`
   );
 });
+module.exports = {app, pool, createMcpServer};

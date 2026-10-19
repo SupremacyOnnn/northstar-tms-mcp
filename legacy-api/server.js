@@ -4,8 +4,7 @@ const pool = require("./db");
 const bcrypt = require("bcrypt");
 
 const app = express();
-//const PORT = process.env.PORT || 3000;
-const PORT = 3001;
+const PORT = Number(process.env.PORT || 3001);
 
 // Allow JSON requests
 app.use(express.json());
@@ -220,8 +219,9 @@ app.post("/api/v1/auth/login", async (req, res) => {
 
 
 // Start server
-app.listen(PORT, () => {
+if (require.main === module) app.listen(PORT, () => {
   console.log(
     `Northstar REST API running at http://localhost:${PORT}`
   );
 });
+module.exports = {app, pool};
