@@ -52,6 +52,14 @@ test('ChatGPT OAuth, MCP, REST and tenant isolation', async t => {
   const password = crypto.randomBytes(24).toString('hex');
   const passwordHash = await bcrypt.hash(password, 4);
   const owners = {'NS-A-001':'user-a', 'NS-B-001':'user-b'};
+  const listedLoads = [
+    {id:'NS-A-001', origin:'A', destination:'B', equipment_type:'Dry van', status:'In transit'},
+    {id:'NS-A-002', origin:'C', destination:'D', equipment_type:'Reefer', status:'Booked'},
+    {id:'NS-A-003', origin:'G', destination:'H', equipment_type:'Van', status:'Assigned'},
+    {id:'NS-A-004', origin:'I', destination:'J', equipment_type:'Van', status:'Assigned'},
+    {id:'NS-B-001', origin:'E', destination:'F', equipment_type:'Flatbed', status:'Delivered'}
+  ];
+  const authorizationModes = {'NS-A-001':'owner','NS-A-002':'supervisor','NS-A-003':'explicit grant','NS-A-004':'company-wide','NS-B-001':'other tenant'};
   const calls = [];
   async function query(sql, values = []) {
     if (sql.includes('oidc_adapter_store')) {
@@ -68,7 +76,12 @@ test('ChatGPT OAuth, MCP, REST and tenant isolation', async t => {
       return {rows:row && (!row.expires || row.expires > new Date()) ? [{payload:JSON.parse(JSON.stringify(row.payload))}] : []};
     }
     if (sql.includes('public.users')) return {rows: ['user-a','user-b'].includes(values[0]) ? [{id:values[0],display_name:'Fixture user',role:'customer',active:true,allowed:true,tenant_allowed:true,password_hash:passwordHash}] : []};
-    if (sql.includes('demo_can_view_load')) { calls.push(['authorization',...values]); return {rows:[{allowed:owners[values[1]] === values[0]}]}; }
+    if (sql.includes('FROM public.loads l')) {
+      const cursor=values[1], limit=values[2];
+      const visible=listedLoads.filter(row => (values[0] === 'user-a' ? row.id.startsWith('NS-A-') : owners[row.id] === values[0]) && (!cursor || row.id > cursor));
+      return {rows:visible.slice(0,limit)};
+    }
+    if (sql.includes('demo_can_view_load')) { calls.push(['authorization',...values]); return {rows:[{allowed:(values[0] === 'user-a' && values[1].startsWith('NS-A-')) || owners[values[1] ] === values[0]}]}; }
     if (sql.includes('public.load_events')) { calls.push(['events',values[0]]); return {rows:[{id:1,load_id:values[0],event_type:'fixture-event'}]}; }
     if (sql.includes('public.loads')) { calls.push(['status',values[0]]); return {rows:[{load_id:values[0],status:'In transit'}]}; }
     throw new Error('Unexpected fixture query');
@@ -221,12 +234,28 @@ test('ChatGPT OAuth, MCP, REST and tenant isolation', async t => {
       const client=new Client({name:'isolated-test',version:'1.0.0'});
       try {
         await client.connect(new StreamableHTTPClientTransport(new URL(resource),{requestInit:{headers:{authorization:`Bearer ${token}`}}}));
-        const tools=await client.listTools(); expect(tools.tools.length===2,'Unexpected tool list');
+        const tools=await client.listTools(); expect(tools.tools.length===3,'Unexpected tool list');
         for(const name of ['get_load_status','get_load_events']) {
           const allowed=await client.callTool({name,arguments:{load_id:own}}); expect(!allowed.isError,'Authorized tool call failed');
           const before=calls.filter(c=>c[0]=== (name==='get_load_events'?'events':'status')).length;
           const denied=await client.callTool({name,arguments:{load_id:other}}); expect(denied.isError===true,'Cross-tenant access succeeded');
           expect(calls.filter(c=>c[0]===(name==='get_load_events'?'events':'status')).length===before,'Denied request read shipment data');
+        }
+        const listed=await client.callTool({name:'list_my_loads',arguments:{limit:1}});
+        expect(!listed.isError,'Authorized shipment listing failed');
+        const page=JSON.parse(listed.content[0].text);
+        expect(page.loads.length===1 && page.loads[0].id.startsWith(own.slice(0,4)) && !('tenant_id' in page.loads[0]),'Unexpected listing response');
+        const next=await client.callTool({name:'list_my_loads',arguments:{cursor:page.next_cursor,limit:10}});
+        expect(!next.isError,'Paginated shipment listing failed');
+        const nextPage=JSON.parse(next.content[0].text);
+        expect(nextPage.loads.every(row=>row.id.startsWith(own.slice(0,4))),'Cross-tenant shipment listed');
+        const empty=await client.callTool({name:'list_my_loads',arguments:{cursor:'ZZZ',limit:10}});
+        expect(!empty.isError && JSON.parse(empty.content[0].text).loads.length===0,'Empty authorized listing failed');
+        if (token === tokenA) {
+          const modes = Object.keys(authorizationModes).filter(id => id.startsWith('NS-A-'));
+          const all = await client.callTool({name:'list_my_loads',arguments:{limit:10}});
+          const ids = JSON.parse(all.content[0].text).loads.map(row => row.id);
+          expect(modes.every(id => ids.includes(id)),'Supervisor, explicit-grant, or company-wide access missing');
         }
       } finally { await client.close(); }
     }

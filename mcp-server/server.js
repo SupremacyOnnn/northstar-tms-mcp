@@ -172,6 +172,24 @@ async function getLoadEvents(userId, loadId) {
   return {load_id: loadId, events: result.rows};
 }
 
+async function listMyLoads(userId, cursor, limit) {
+  const result = await pool.query(
+    `SELECT l.id, l.origin, l.destination, l.equipment_type, l.status,
+            l.current_location, l.scheduled_delivery, l.estimated_delivery,
+            l.updated_at
+       FROM public.loads l
+      WHERE public.demo_can_view_load($1, l.id)
+        AND ($2::text IS NULL OR l.id > $2::text)
+      ORDER BY l.id
+      LIMIT $3`,
+    [userId, cursor || null, limit]
+  );
+  const nextCursor = result.rows.length === limit
+    ? result.rows[result.rows.length - 1].id
+    : null;
+  return {loads: result.rows, next_cursor: nextCursor};
+}
+
 function createMcpServer(userId) {
   const server = new McpServer({
     name: "northstar-tms",
@@ -248,6 +266,25 @@ function createMcpServer(userId) {
     }
   );
 
+  server.registerTool(
+    "list_my_loads",
+    {
+      description: "List shipments the authenticated Northstar TMS user is authorized to view.",
+      inputSchema: {
+        cursor: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(100).default(25)
+      }
+    },
+    async ({cursor, limit = 25}) => {
+      try {
+        const data = await listMyLoads(userId, cursor, limit);
+        return {content: [{type: "text", text: JSON.stringify(data, null, 2)}]};
+      } catch (error) {
+        return {isError: true, content: [{type: "text", text: error.message}]};
+      }
+    }
+  );
+
   return server;
 }
 
@@ -255,7 +292,7 @@ app.get("/health", (req, res) => {
   res.json({
     application: "Northstar TMS MCP Server",
     status: "running",
-    tools: ["get_load_status", "get_load_events"]
+    tools: ["get_load_status", "get_load_events", "list_my_loads"]
   });
 });
 
