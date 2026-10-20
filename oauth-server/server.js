@@ -188,6 +188,19 @@ const provider = new Provider(ISSUER, configuration);
 provider.proxy = renderProxy;
 provider.maxIpsCount = 1;
 
+// Temporary safe diagnostics for authorization failures. Do not include request
+// data: provider contexts can contain URLs, codes, state, cookies, and PKCE.
+provider.on("server_error", (ctx, error) => {
+  const stack = typeof error?.stack === "string"
+    ? error.stack.split("\n").slice(0, 5).join("\n").replaceAll(process.cwd(), "[app]")
+    : "";
+  console.error("OAuth provider server_error", {
+    error: error?.name || "Error",
+    message: error?.message || "Unknown OAuth provider error",
+    stack
+  });
+});
+
 // --------------------------------------------------
 // --------------------------------------------------
 // Health endpoint
