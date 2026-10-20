@@ -190,6 +190,29 @@ async function listMyLoads(userId, cursor, limit) {
   return {loads: result.rows, next_cursor: nextCursor};
 }
 
+async function getBestLaneOffer(origin, destination, equipment, quantity) {
+  const result = await pool.query(
+    `SELECT price_usd, trucks_available
+       FROM public.demo_best_lane_offer($1, $2, $3, $4)`,
+    [origin, destination, equipment, quantity]
+  );
+  const offer = result.rows[0];
+  if (!offer) throw new Error("No demonstration lane offer available");
+  const priceUsd = Number(offer.price_usd);
+  const trucksAvailable = Number(offer.trucks_available);
+  return {
+    demo_only: true,
+    notice: "Synthetic demonstration data; not a live freight quotation.",
+    origin,
+    destination,
+    equipment,
+    quantity,
+    price_usd_per_truck: priceUsd,
+    trucks_available: trucksAvailable,
+    total_price_usd: priceUsd * quantity
+  };
+}
+
 function createMcpServer(userId) {
   const server = new McpServer({
     name: "northstar-tms",
@@ -285,6 +308,27 @@ function createMcpServer(userId) {
     }
   );
 
+  server.registerTool(
+    "get_best_lane_offer",
+    {
+      description: "Get synthetic demonstration lane pricing; not a live freight quotation.",
+      inputSchema: {
+        origin: z.string().trim().min(1).max(200),
+        destination: z.string().trim().min(1).max(200),
+        equipment: z.string().trim().min(1).max(100),
+        quantity: z.number().int().min(1).max(1000)
+      }
+    },
+    async ({origin, destination, equipment, quantity}) => {
+      try {
+        const data = await getBestLaneOffer(origin, destination, equipment, quantity);
+        return {content: [{type: "text", text: JSON.stringify(data, null, 2)}]};
+      } catch (error) {
+        return {isError: true, content: [{type: "text", text: error.message}]};
+      }
+    }
+  );
+
   return server;
 }
 
@@ -292,7 +336,7 @@ app.get("/health", (req, res) => {
   res.json({
     application: "Northstar TMS MCP Server",
     status: "running",
-    tools: ["get_load_status", "get_load_events", "list_my_loads"]
+    tools: ["get_load_status", "get_load_events", "list_my_loads", "get_best_lane_offer"]
   });
 });
 

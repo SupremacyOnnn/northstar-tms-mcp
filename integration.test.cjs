@@ -76,6 +76,7 @@ test('ChatGPT OAuth, MCP, REST and tenant isolation', async t => {
       return {rows:row && (!row.expires || row.expires > new Date()) ? [{payload:JSON.parse(JSON.stringify(row.payload))}] : []};
     }
     if (sql.includes('public.users')) return {rows: ['user-a','user-b'].includes(values[0]) ? [{id:values[0],display_name:'Fixture user',role:'customer',active:true,allowed:true,tenant_allowed:true,password_hash:passwordHash}] : []};
+    if (sql.includes('demo_best_lane_offer')) { calls.push(['lane_offer',...values]); return {rows:[{price_usd:'1250.50',trucks_available:7}]}; }
     if (sql.includes('FROM public.loads l')) {
       const cursor=values[1], limit=values[2];
       const visible=listedLoads.filter(row => (values[0] === 'user-a' ? row.id.startsWith('NS-A-') : owners[row.id] === values[0]) && (!cursor || row.id > cursor));
@@ -234,7 +235,7 @@ test('ChatGPT OAuth, MCP, REST and tenant isolation', async t => {
       const client=new Client({name:'isolated-test',version:'1.0.0'});
       try {
         await client.connect(new StreamableHTTPClientTransport(new URL(resource),{requestInit:{headers:{authorization:`Bearer ${token}`}}}));
-        const tools=await client.listTools(); expect(tools.tools.length===3,'Unexpected tool list');
+        const tools=await client.listTools(); expect(tools.tools.length===4,'Unexpected tool list');
         for(const name of ['get_load_status','get_load_events']) {
           const allowed=await client.callTool({name,arguments:{load_id:own}}); expect(!allowed.isError,'Authorized tool call failed');
           const before=calls.filter(c=>c[0]=== (name==='get_load_events'?'events':'status')).length;
@@ -257,6 +258,11 @@ test('ChatGPT OAuth, MCP, REST and tenant isolation', async t => {
           const ids = JSON.parse(all.content[0].text).loads.map(row => row.id);
           expect(modes.every(id => ids.includes(id)),'Supervisor, explicit-grant, or company-wide access missing');
         }
+        const offer=await client.callTool({name:'get_best_lane_offer',arguments:{origin:'A',destination:'B',equipment:'Dry van',quantity:2}});
+        expect(!offer.isError,'Demo lane offer failed');
+        const offerData=JSON.parse(offer.content[0].text);
+        expect(offerData.demo_only===true && offerData.price_usd_per_truck===1250.5 && offerData.trucks_available===7 && offerData.total_price_usd===2501,'Demo offer calculation or labeling failed');
+        expect(calls.some(c=>c[0]==='lane_offer' && c[1]==='A' && c[2]==='B' && c[3]==='Dry van' && c[4]===2),'Parameterized lane offer query missing');
       } finally { await client.close(); }
     }
   });
