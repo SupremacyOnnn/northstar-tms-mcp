@@ -511,6 +511,30 @@ app.post(
 // OAuth endpoints
 // --------------------------------------------------
 
+// Temporary redirect diagnostics. This records only the public OAuth client
+// identifier, requested callback, and match result; validation remains in
+// oidc-provider and is not bypassed.
+app.use((req, res, next) => {
+  if (req.path === "/auth" && req.method === "GET") {
+    const requestedClientId = typeof req.query.client_id === "string"
+      ? req.query.client_id
+      : "";
+    const requestedRedirectUri = typeof req.query.redirect_uri === "string"
+      ? req.query.redirect_uri
+      : "";
+    const registeredRedirects = requestedClientId === chatgptClientId
+      ? chatgptRedirects
+      : [];
+
+    console.warn("OAuth redirect diagnostic", {
+      clientId: requestedClientId,
+      redirectUri: requestedRedirectUri,
+      redirectUriMatches: registeredRedirects.includes(requestedRedirectUri)
+    });
+  }
+  next();
+});
+
 app.use(provider.callback());
 
 // --------------------------------------------------
